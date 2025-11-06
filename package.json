@@ -46,10 +46,12 @@
     "access": "public"
   },
   "dependencies": {
+    "@defi-wonderland/interop-addresses": "^0.0.1",
     "dotenv": "^16.3.1",
     "ethers": "^6.9.0",
     "graphql-request": "^6.1.0",
-    "ipfs-http-client": "^60.0.1"
+    "ipfs-http-client": "^60.0.1",
+    "viem": "^2.38.6"
   },
   "devDependencies": {
     "@graphql-codegen/cli": "^6.0.1",

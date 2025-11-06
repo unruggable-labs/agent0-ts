@@ -14,6 +14,7 @@ import { EndpointCrawler } from './endpoint-crawler.js';
 import { parseAgentId } from '../utils/id-format.js';
 import { TIMEOUTS } from '../utils/constants.js';
 import { validateSkill, validateDomain } from './oasf-validator.js';
+import { loadAgentRegistryRecord, recordMatchesAgent } from '../utils/ens-verifier';
 
 /**
  * Agent class for managing individual agents
@@ -176,6 +177,43 @@ export class Agent {
     this.registrationFile.updatedAt = Math.floor(Date.now() / 1000);
 
     return this;
+  }
+
+  async verifyENSName(): Promise<boolean> {
+    const ensName = this.ensEndpoint;
+    const agentId = this.registrationFile.agentId;
+    if (!ensName || !agentId) {
+      return false;
+    }
+
+    let tokenInfo;
+    try {
+      tokenInfo = parseAgentId(agentId);
+    } catch {
+      return false;
+    }
+
+    const record = await loadAgentRegistryRecord(
+      this.sdk.web3Client.provider,
+      ensName,
+      BigInt(tokenInfo.chainId)
+    );
+    if (!record) {
+      return false;
+    }
+
+    let registryAddress: string;
+    try {
+      registryAddress = await this.sdk.getIdentityRegistry().getAddress();
+    } catch {
+      return false;
+    }
+
+    return recordMatchesAgent(record, {
+      chainId: BigInt(tokenInfo.chainId),
+      registryAddress,
+      agentId: BigInt(tokenInfo.tokenId),
+    });
   }
 
   // OASF endpoint management
@@ -766,4 +804,3 @@ export class Agent {
     throw new Error('Could not extract agent ID from transaction receipt - no Registered or Transfer event found');
   }
 }
-

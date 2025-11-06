@@ -5,8 +5,12 @@ export default {
   roots: ['<rootDir>/tests'],
   testMatch: ['**/*.test.ts'],
   transform: {
-    '^.+\\.ts$': ['ts-jest', {
+    '^.+\\.(ts|js)$': ['ts-jest', {
       tsconfig: {
+        module: 'CommonJS',
+        target: 'ES2020',
+        esModuleInterop: true,
+        allowJs: true,
         types: ['jest', 'node'],
       },
       useESM: true,
@@ -26,7 +30,6 @@ export default {
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
   transformIgnorePatterns: [
-    'node_modules/(?!(ipfs-http-client)/)',
+    'node_modules/(?!(ipfs-http-client|@defi-wonderland/interop-addresses)/)',
   ],
 };
-
