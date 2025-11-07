@@ -69,6 +69,7 @@ export async function fetchAgentRegistryRecord(
   ensName: string,
   recordKey: string
 ): Promise<string | null> {
+  const normalizedKey = recordKey.toLowerCase();
   let resolver;
   try {
     resolver = await provider.getResolver(ensName);
@@ -81,8 +82,9 @@ export async function fetchAgentRegistryRecord(
   }
 
   try {
-    return await resolver.getText(recordKey);
-  } catch {
+    const text = await resolver.getText(normalizedKey);
+    return text;
+  } catch (error) {
     return null;
   }
 }
@@ -143,7 +145,7 @@ function encode7930ChainIdentifierHex(chainId: bigint, namespace: keyof typeof C
   const payload = InteropAddressProvider.buildFromPayload({
     version: 1,
     chainType: namespace,
-    chainReference: ethers.toBeHex(chainId),
+    chainReference: ethers.toBeHex(chainId).toLowerCase(),
     address: '0x',
   });
 
@@ -176,7 +178,7 @@ export async function loadAgentRegistryRecord(
       ...decoded,
       chainReference: BigInt(chainId),
     };
-  } catch {
+  } catch (error) {
     return null;
   }
 }
