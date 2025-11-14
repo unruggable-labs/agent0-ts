@@ -270,38 +270,13 @@ export class EndpointCrawler {
    *
    * Per A2A Protocol spec (v0.3.0), agent cards should have:
    *   skills: AgentSkill[] where each AgentSkill has a tags[] array
-   *
-   * This method also handles non-standard formats for backward compatibility:
-   * - detailedSkills[].tags[] (custom extension)
-   * - skills: ["tag1", "tag2"] (non-compliant flat array)
    */
   private _extractA2aSkills(data: any): string[] {
     const result: string[] = [];
 
-    // Try spec-compliant format first: skills[].tags[]
+    // Extract tags from skills array
     if ('skills' in data && Array.isArray(data.skills)) {
       for (const skill of data.skills) {
-        if (skill && typeof skill === 'object' && 'tags' in skill) {
-          // Spec-compliant: AgentSkill object with tags
-          const tags = skill.tags;
-          if (Array.isArray(tags)) {
-            for (const tag of tags) {
-              if (typeof tag === 'string') {
-                result.push(tag);
-              }
-            }
-          }
-        } else if (typeof skill === 'string') {
-          // Non-compliant: flat string array (fallback)
-          result.push(skill);
-        }
-      }
-    }
-
-    // Fallback to detailedSkills if no tags found in skills
-    // (custom extension used by some implementations)
-    if (result.length === 0 && 'detailedSkills' in data && Array.isArray(data.detailedSkills)) {
-      for (const skill of data.detailedSkills) {
         if (skill && typeof skill === 'object' && 'tags' in skill) {
           const tags = skill.tags;
           if (Array.isArray(tags)) {

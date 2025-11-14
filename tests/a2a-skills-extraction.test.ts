@@ -49,29 +49,14 @@ describe('A2A Skills Extraction', () => {
     expect(skills).toEqual(['blockchain', 'cryptocurrency', 'defi', 'trading']);
   });
 
-  test('should handle flat string array (non-compliant fallback)', async () => {
+  test('should return empty array for non-object skills', async () => {
     const mockAgentCard = {
-      skills: ['blockchain', 'cryptocurrency', 'defi'],
+      skills: ['blockchain', 'cryptocurrency', 'defi'], // Invalid format
     };
 
     const skills = (crawler as any)._extractA2aSkills(mockAgentCard);
 
-    expect(skills).toEqual(['blockchain', 'cryptocurrency', 'defi']);
-  });
-
-  test('should handle detailedSkills fallback', async () => {
-    const mockAgentCard = {
-      detailedSkills: [
-        {
-          id: 'skill-1',
-          tags: ['blockchain', 'cryptocurrency'],
-        },
-      ],
-    };
-
-    const skills = (crawler as any)._extractA2aSkills(mockAgentCard);
-
-    expect(skills).toEqual(['blockchain', 'cryptocurrency']);
+    expect(skills).toEqual([]);
   });
 
   test('should remove duplicate tags', async () => {
@@ -104,16 +89,19 @@ describe('A2A Skills Extraction', () => {
     expect(skills).toEqual([]);
   });
 
-  test('should handle mixed skill formats', async () => {
+  test('should skip skills without tags field', async () => {
     const mockAgentCard = {
       skills: [
         {
           id: 'skill-1',
           tags: ['blockchain'],
         },
-        'cryptocurrency', // flat string
         {
           id: 'skill-2',
+          name: 'No tags here', // Missing tags field
+        },
+        {
+          id: 'skill-3',
           tags: ['defi'],
         },
       ],
@@ -121,7 +109,7 @@ describe('A2A Skills Extraction', () => {
 
     const skills = (crawler as any)._extractA2aSkills(mockAgentCard);
 
-    expect(skills).toEqual(['blockchain', 'cryptocurrency', 'defi']);
+    expect(skills).toEqual(['blockchain', 'defi']);
   });
 
   test('should fetch skills from real Deep42 agent card', async () => {
