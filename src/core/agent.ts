@@ -179,13 +179,22 @@ export class Agent {
     return this;
   }
 
+  /**
+   * Verifies that the ENS record configured for this agent actually points to
+   * the on-chain registry encoded in the registration file.
+   *
+   * Fetches the ENSIP-25 text record, decodes it, and compares it against the
+   * locally stored agentId + registry. Returns false on any mismatch/missing data.
+   */
   async verifyENSName(): Promise<boolean> {
+    // Fast fail if the agent is missing ENS info or is not registered yet.
     const ensName = this.ensEndpoint;
     const agentId = this.registrationFile.agentId;
     if (!ensName || !agentId) {
       return false;
     }
 
+    // Agent IDs are stored as `<chainId>:<tokenId>`; parse and validate before RPC calls.
     let tokenInfo;
     try {
       tokenInfo = parseAgentId(agentId);
@@ -193,6 +202,7 @@ export class Agent {
       return false;
     }
 
+    // Resolve the ENS text record published via ENSIP-25 for the agent's chain.
     const record = await loadAgentRegistryRecord(
       this.sdk.web3Client.provider,
       ensName,
@@ -202,6 +212,7 @@ export class Agent {
       return false;
     }
 
+    // Obtain the registry address from the SDK so we compare against the exact contract.
     let registryAddress: string;
     try {
       registryAddress = await this.sdk.getIdentityRegistry().getAddress();
@@ -209,6 +220,7 @@ export class Agent {
       return false;
     }
 
+    // Compare the ENS payload with expected chain, registry, and token identifiers.
     return recordMatchesAgent(record, {
       chainId: BigInt(tokenInfo.chainId),
       registryAddress,

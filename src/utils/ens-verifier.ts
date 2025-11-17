@@ -1,20 +1,11 @@
 /**
- * verifyENSName(): ENSIP‑25 agent‑registry helpers
+ * Utilities used by `Agent.verifyENSName()` to read and validate ENSIP‑25 records.
  *
- * Key
- * - `agent-registry:<hex 7930 chain id>` (lowercase hex, no 0x; addrLen=0)
- * - Chain id encoded per ERC‑7930 Interoperable Address V1 (chain only)
- *
- * Value (EVM only)
- * - `<EIP55 address><agentIdLen(2 hex)><agentIdHex>`
- * - Address is CAIP‑350 eip155 address text (EIP‑55 checksum)
- * - Agent ID fields are lowercase hex, no 0x
- *
- * References
- * - ERC‑7930: Interoperable Addresses — https://eips.ethereum.org/EIPS/eip-7930
- * - CAIP‑350 (eip155 profile): https://github.com/ChainAgnostic/namespaces/blob/main/eip155/caip350.md
- * - ENSIP‑25: AI Agent Registry ENS Name Verification — https://github.com/nxt3d/ensips/blob/ensip-25/ensips/25.md
- */
+ * We fetch the ENS text key `agent-registry:<7930 chain id>`,
+ * decode the value (`<EIP55 registry address><agentIdLength><agentIdHex>`), then
+ * compare the decoded registry + token id against what the SDK expects.
+ * ENSIP-25: 
+*/
 
 import { ethers } from 'ethers';
 import { InteropAddressProvider } from '@defi-wonderland/interop-addresses';
@@ -104,6 +95,7 @@ export function decodeAgentRegistryRecord(valueHex: string): AgentRegistryRecord
     throw new Error('Agent registry record value too short');
   }
 
+  // Split the payload into `<address><len><agentId>` per ENSIP-25.
   const addressText = valueHex.slice(0, ADDRESS_HEX_LENGTH);
   const agentIdLengthHex = valueHex.slice(ADDRESS_HEX_LENGTH, ADDRESS_HEX_LENGTH + 2);
   const agentIdLength = parseInt(agentIdLengthHex, 16);
@@ -166,6 +158,7 @@ export async function loadAgentRegistryRecord(
   chainId: bigint | number | string,
   namespace: keyof typeof CAIP_NAMESPACE_CODES = 'eip155'
 ): Promise<AgentRegistryRecord | null> {
+  // Build the ENS text key that points to the agent registry payload.
   const recordKey = buildAgentRegistryRecordKey(chainId, namespace);
   const value = await fetchAgentRegistryRecord(provider, ensName, recordKey);
   if (!value) {
@@ -173,6 +166,7 @@ export async function loadAgentRegistryRecord(
   }
 
   try {
+    // Decode the ENS record.
     const decoded = decodeAgentRegistryRecord(value);
     return {
       ...decoded,
@@ -195,6 +189,7 @@ export function recordMatchesAgent(
     return false;
   }
 
+  // The ENS record must be anchored to the same chain, registry contract, and token id.
   if (record.chainReference !== expected.chainId) {
     return false;
   }
