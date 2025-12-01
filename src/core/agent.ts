@@ -14,6 +14,7 @@ import { EndpointCrawler } from './endpoint-crawler.js';
 import { parseAgentId } from '../utils/id-format.js';
 import { TIMEOUTS } from '../utils/constants.js';
 import { validateSkill, validateDomain } from './oasf-validator.js';
+import { loadAgentRegistryRecord, recordMatchesAgent } from '../utils/ens-verifier';
 
 /**
  * Agent class for managing individual agents
@@ -176,6 +177,55 @@ export class Agent {
     this.registrationFile.updatedAt = Math.floor(Date.now() / 1000);
 
     return this;
+  }
+
+  /**
+   * Verifies that the ENS record configured for this agent actually points to
+   * the on-chain registry encoded in the registration file.
+   *
+   * Fetches the ENSIP-25 text record, decodes it, and compares it against the
+   * locally stored agentId + registry. Returns false on any mismatch/missing data.
+   */
+  async verifyENSName(): Promise<boolean> {
+    // Fast fail if the agent is missing ENS info or is not registered yet.
+    const ensName = this.ensEndpoint;
+    const agentId = this.registrationFile.agentId;
+    if (!ensName || !agentId) {
+      return false;
+    }
+
+    // Agent IDs are stored as `<chainId>:<tokenId>`; parse and validate before RPC calls.
+    let tokenInfo;
+    try {
+      tokenInfo = parseAgentId(agentId);
+    } catch {
+      return false;
+    }
+
+    // Resolve the ENS text record published via ENSIP-25 for the agent's chain.
+    const record = await loadAgentRegistryRecord(
+      this.sdk.web3Client.provider,
+      ensName,
+      BigInt(tokenInfo.chainId)
+    );
+    if (!record) {
+      return false;
+    }
+
+    // Obtain the registry address from the SDK so we compare against the exact contract.
+    let registryAddress: string;
+    try {
+      registryAddress = await this.sdk.getIdentityRegistry().getAddress();
+    } catch {
+      return false;
+    }
+
+    // Compare the ENS payload with expected chain, registry, and token identifiers.
+    return recordMatchesAgent(record, {
+      chainId: BigInt(tokenInfo.chainId),
+      registryAddress,
+      agentId: BigInt(tokenInfo.tokenId),
+    });
   }
 
   // OASF endpoint management
@@ -766,4 +816,3 @@ export class Agent {
     throw new Error('Could not extract agent ID from transaction receipt - no Registered or Transfer event found');
   }
 }
-
