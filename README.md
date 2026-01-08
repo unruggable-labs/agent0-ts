@@ -200,10 +200,10 @@ const summary = await sdk.getReputationSummary('84532:123'); // Base Sepolia
 ```
 
 ## Verify ENS Records
-Agents that advertise an ENS endpoint should publish an [ENSIP-25](https://github.com/nxt3d/ensips/blob/ensip-25/ensips/25.md) compliant text record, to allow any entity interacting with the agent to verify it's identity. Without it, ENS verification cannot succeed. To verify an agent's ENS name:
+Agents that advertise an ENS endpoint should publish an [ENSIP-25](https://github.com/nxt3d/ensips/blob/ensip-25/ensips/25.md) compliant `data()` records, to allow any entity interacting with the agent to verify its identity. Without it, ENS verification cannot succeed. To verify an agent's ENS name:
 
 
-Call `await agent.verifyENSName()` on any loaded agent. The SDK resolves the ENS text record, parses the ENSIP payload, and compares it to the agent's on-chain registry + token id. It returns a boolean.
+Call `await agent.verifyENSName()` on any loaded agent. The SDK resolves the ENS `data()` records, parses the payload, and compares it to the agent's on-chain registry + token id. It returns a boolean.
 
 ```typescript
 const agent = await sdk.loadAgent('11155111:1135');

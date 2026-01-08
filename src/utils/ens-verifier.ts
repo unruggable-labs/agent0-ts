@@ -1,30 +1,19 @@
 /**
  * Utilities used by `Agent.verifyENSName()` to read and validate ENSIP‑25 records.
  *
- * We fetch the ENS text key `agent-registry:<7930 chain id>`,
- * decode the value (`<EIP55 registry address><agentIdLength><agentIdHex>`), then
- * compare the decoded registry + token id against what the SDK expects.
- * ENSIP-25: 
-*/
+ * ENS names MAY publish one or more ENSIP-25 data records using keys
+ * `agent-registry` and `agent-registry: N` (N = 1,2,3,...) in priority order.
+ *
+ * Each record value is `bytes` with:
+ *   <ERC‑7930 address bytes><agentIdLength(1 byte)><agentId bytes>
+ */
 
-import type { AbstractProvider } from 'ethers';
-import { getAddress, getBytes, hexlify, toBeHex } from 'ethers';
+import type { AbstractProvider, BytesLike } from 'ethers';
+import { getAddress, getBytes, hexlify, namehash } from 'ethers';
 import { InteropAddressProvider } from '@defi-wonderland/interop-addresses';
 
-// Currently restricted to EVM (eip155) namespaces; future namespaces can be added here.
-const CAIP_NAMESPACE_CODES: Record<string, number> = {
-  eip155: 0x0000,
-};
-
-/**
- * Input payload used when encoding an ENS agent-registry record.
- */
-export interface AgentRegistryRecordInput {
-  namespace?: keyof typeof CAIP_NAMESPACE_CODES;
-  chainId: bigint | number | string;
-  registryAddress: string;
-  agentId: bigint | number | string;
-}
+// ERC-7930 chain type code for eip155 (EVM).
+const CHAIN_TYPE_EIP155 = 0x0000;
 
 /**
  * Decoded representation of the ENS registry record.
@@ -37,145 +26,166 @@ export interface AgentRegistryRecord {
   agentId: bigint;
 }
 
-/**
- * Build key: `agent-registry:<hex 7930 chain id>` (EVM only).
- * See ERC‑7930 for chain id binary envelope (addrLen=0), hex‑encoded.
- */
-export function buildAgentRegistryRecordKey(
-  chainId: bigint | number | string,
-  namespace: keyof typeof CAIP_NAMESPACE_CODES = 'eip155'
-): string {
-  if (CAIP_NAMESPACE_CODES[namespace] === undefined) {
-    throw new Error(`Unsupported CAIP namespace: ${namespace}`);
-  }
-  const chainIdentifierHex = encode7930ChainIdentifierHex(BigInt(chainId), namespace);
-  return `agent-registry:${chainIdentifierHex}`;
+export interface DataResolverInterface {
+  data(node: string, key: string): Promise<BytesLike>;
 }
 
 /**
- * Resolve the raw text record for the given ENS name and record key.
- * Returns null if missing or if the resolver lookup fails.
+ * Keys to check, in priority order: `agent-registry` then `agent-registry: N`.
  */
-export async function fetchAgentRegistryRecord(
-  provider: AbstractProvider,
-  ensName: string,
+export function buildAgentRegistryRecordKeys(maxAdditionalEntries: number = 4): string[] {
+  const keys = ['agent-registry'];
+  for (let i = 1; i <= maxAdditionalEntries; i += 1) {
+    keys.push(`agent-registry: ${i}`);
+  }
+  return keys;
+}
+
+function parseAgentRegistryRecord(valueBytes: Uint8Array): {
+  erc7930Hex: `0x${string}`;
+  agentIdBytes: Uint8Array;
+} {
+  // First 2 bytes are the ERC-7930 segment length.
+  if (valueBytes.length < 2) {
+    throw new Error('agent-registry record value too short');
+  }
+  const header = valueBytes.slice(0, 2);
+  const erc7930Len = (header[0] << 8) | header[1];
+
+  // Remaining bytes start with the ERC-7930 payload, then the agent-id portion.
+  const body = valueBytes.slice(2);
+  if (erc7930Len > body.length) {
+    throw new Error('ERC-7930 segment out of bounds');
+  }
+
+  // Slice out the ERC-7930 binary payload so we can use the interop library to decode it.
+  const erc7930Hex = hexlify(body.slice(0, erc7930Len)) as `0x${string}`;
+
+  if (!InteropAddressProvider.isValidBinaryAddress(erc7930Hex)) {
+    throw new Error('Invalid ERC-7930 binary address');
+  }
+
+  // Next byte is agent ID length, followed by that many bytes of agent ID.
+  const lengthOffset = erc7930Len;
+  if (lengthOffset >= body.length) {
+    throw new Error('agent-registry record value too short');
+  }
+  const agentIdLen = body[lengthOffset];
+  const agentIdStart = lengthOffset + 1;
+  const recordEnd = agentIdStart + agentIdLen;
+  if (recordEnd !== body.length) {
+    throw new Error(
+      recordEnd > body.length
+        ? 'Agent ID out of bounds'
+        : 'Unexpected trailing bytes in agent-registry record'
+    );
+  }
+  const agentIdBytes = body.slice(agentIdStart, recordEnd);
+
+  return { erc7930Hex, agentIdBytes };
+}
+
+async function ensureSupportedNamespace(erc7930Hex: `0x${string}`): Promise<void> {
+  // Only EVM addresses are supported today; other namespaces should be rejected early.
+  const humanReadable = await InteropAddressProvider.binaryToHumanReadable(erc7930Hex);
+  const match = humanReadable.match(/@([^:]+):/);
+  const namespace = match?.[1];
+  if (namespace !== 'eip155') {
+    throw new Error(`Unsupported namespace: ${namespace ?? 'unknown'}`);
+  }
+}
+
+/**
+ * Resolve a single ENSIP-24 `data()` record and return raw bytes.
+ */
+export async function fetchAgentRegistryDataRecord(
+  resolver: { data: (node: string, key: string) => Promise<BytesLike> },
+  node: string,
   recordKey: string
-): Promise<string | null> {
-  const normalizedKey = recordKey.toLowerCase();
-  let resolver;
+): Promise<Uint8Array | null> {
   try {
-    resolver = await provider.getResolver(ensName);
+    // assumption: resolver implements ENSIP-24 `data(bytes32,string)`.
+    const value = await resolver.data(node, recordKey);
+    const bytes = getBytes(value);
+    return bytes.length === 0 ? null : bytes;
   } catch {
     return null;
   }
+}
 
-  if (!resolver) {
-    return null;
-  }
-
+// Resolve the ENS resolver for a name; returns null if it is missing or lookup fails.
+async function resolveEnsDataResolver(
+  provider: AbstractProvider,
+  ensName: string
+): Promise<DataResolverInterface | null> {
   try {
-    const text = await resolver.getText(normalizedKey);
-    return text;
-  } catch (error) {
+    return (await provider.getResolver(ensName)) as unknown as DataResolverInterface;
+  } catch {
     return null;
   }
 }
 
 /**
- * Decode value text: `<EIP55 address><agentIdLen><agentId>`.
- * Validates minimum length and hex sizes; normalizes address via EIP‑55.
+ * Decode ENSIP-25 bytes:
+ *   `<erc7930Len(2 bytes)><erc7930AddressBytes><agentIdLen(1 byte)><agentIdBytes>`.
  */
-export function decodeAgentRegistryRecord(valueHex: string): AgentRegistryRecord {
-  if (!valueHex.startsWith('0x')) {
-    throw new Error('CAIP-350 segment must start with 0x');
+export async function decodeAgentRegistryDataRecord(
+  valueBytes: Uint8Array
+): Promise<AgentRegistryRecord> {
+  if (valueBytes.length < 3) {
+    throw new Error('agent-registry record value too short');
   }
+  const { erc7930Hex, agentIdBytes } = parseAgentRegistryRecord(valueBytes);
 
-  const ADDRESS_HEX_LENGTH = 42; // 0x + 40 hex chars for EVM addresses
-  // Require checksum address (42 chars) + at least one byte for agentId length.
-  if (valueHex.length < ADDRESS_HEX_LENGTH + 2) {
-    throw new Error('Agent registry record value too short');
-  }
+  // Ensure only supported namespaces are processed. (EVM)
+  await ensureSupportedNamespace(erc7930Hex);
 
-  // Split the payload into `<address><len><agentId>` per ENSIP-25.
-  const addressText = valueHex.slice(0, ADDRESS_HEX_LENGTH);
-  const agentIdLengthHex = valueHex.slice(ADDRESS_HEX_LENGTH, ADDRESS_HEX_LENGTH + 2);
-  const agentIdLength = parseInt(agentIdLengthHex, 16);
-  if (!Number.isFinite(agentIdLength) || agentIdLength < 0) {
-    throw new Error('Invalid agent ID length');
-  }
-
-  const agentIdHex = valueHex.slice(ADDRESS_HEX_LENGTH + 2).toLowerCase();
-  // Verify byte size and hex validity at the boundary.
-  const agentIdBytes = getBytes(`0x${agentIdHex}`);
-  if (agentIdBytes.length !== agentIdLength) {
-    throw new Error('Agent ID length does not match payload');
-  }
+  const chainReference = BigInt(await InteropAddressProvider.getChainId(erc7930Hex));
+  const interopAddress = await InteropAddressProvider.getAddress(erc7930Hex);
 
   const agentId = agentIdBytes.length === 0 ? 0n : BigInt(hexlify(agentIdBytes));
-  const normalizedAddress = getAddress(addressText);
+  const normalizedAddress = getAddress(interopAddress);
 
   return {
     version: 1,
-    chainType: CAIP_NAMESPACE_CODES.eip155,
-    chainReference: 0n,
+    chainType: CHAIN_TYPE_EIP155,
+    chainReference,
     address: normalizedAddress,
     agentId,
   };
 }
 
 /**
- * Encode the ERC-7930 chain identifier (no address) as lowercase hex without leading 0x.
+ * Load and decode ENS agent-registry records using the prioritized key list.
  */
-function encode7930ChainIdentifierHex(chainId: bigint, namespace: keyof typeof CAIP_NAMESPACE_CODES): string {
-  if (chainId < 0n) {
-    throw new Error('Chain reference must be non-negative');
-  }
-
-  if (CAIP_NAMESPACE_CODES[namespace] === undefined) {
-    throw new Error(`Unsupported CAIP namespace: ${namespace}`);
-  }
-
-  const payload = InteropAddressProvider.buildFromPayload({
-    version: 1,
-    chainType: namespace,
-    chainReference: toBeHex(chainId).toLowerCase(),
-    address: '0x',
-  });
-
-  return payload.slice(2).toLowerCase();
-}
-
-/**
- * Load and decode an ENS agent-registry record for a specific chain.
- *
- * @param provider ethers provider used to resolve ENS text records.
- * @param ensName ENS name to inspect (e.g. `agent.eth`).
- * @param chainId Chain identifier encoded in the ENSIP key (eip155 only).
- * @param namespace CAIP namespace (defaults to `eip155`; other namespaces not yet supported).
- */
-export async function loadAgentRegistryRecord(
+export async function loadAgentRegistryRecords(
   provider: AbstractProvider,
   ensName: string,
-  chainId: bigint | number | string,
-  namespace: keyof typeof CAIP_NAMESPACE_CODES = 'eip155'
-): Promise<AgentRegistryRecord | null> {
-  // Build the ENS text key that points to the agent registry payload.
-  const recordKey = buildAgentRegistryRecordKey(chainId, namespace);
-  const value = await fetchAgentRegistryRecord(provider, ensName, recordKey);
-  if (!value) {
-    return null;
+  maxAdditionalEntries: number = 4
+): Promise<AgentRegistryRecord[]> {
+  const keys = buildAgentRegistryRecordKeys(maxAdditionalEntries);
+  // Resolve the ENS resolver.
+  const resolver = await resolveEnsDataResolver(provider, ensName);
+  if (!resolver) {
+    return [];
   }
 
-  try {
-    // Decode the ENS record.
-    const decoded = decodeAgentRegistryRecord(value);
-    return {
-      ...decoded,
-      chainReference: BigInt(chainId),
-    };
-  } catch (error) {
-    return null;
-  }
+  const node = namehash(ensName);
+  const records = await Promise.all(
+    keys.map(async (key) => {
+      const valueBytes = await fetchAgentRegistryDataRecord(resolver, node, key);
+      if (!valueBytes) return null;
+      try {
+        return await decodeAgentRegistryDataRecord(valueBytes);
+      } catch {
+        // Ignore malformed entries and continue scanning lower-priority keys.
+        return null;
+      }
+    })
+  );
+
+  // Preserve key priority order (Promise.all keeps input ordering).
+  return records.filter((record): record is AgentRegistryRecord => record !== null);
 }
 
 /**
@@ -185,8 +195,8 @@ export function recordMatchesAgent(
   record: AgentRegistryRecord,
   expected: { chainId: bigint; registryAddress: string; agentId: bigint }
 ): boolean {
-  // Currently limited to EVM-compatible records (eip155 namespace).
-  if (record.version !== 1 || record.chainType !== CAIP_NAMESPACE_CODES.eip155) {
+  // Currently limited to EVM-compatible records (eip155).
+  if (record.version !== 1 || record.chainType !== CHAIN_TYPE_EIP155) {
     return false;
   }
 

@@ -14,7 +14,7 @@ import { EndpointCrawler } from './endpoint-crawler.js';
 import { parseAgentId } from '../utils/id-format.js';
 import { TIMEOUTS } from '../utils/constants.js';
 import { validateSkill, validateDomain } from './oasf-validator.js';
-import { loadAgentRegistryRecord, recordMatchesAgent } from '../utils/ens-verifier';
+import { loadAgentRegistryRecords, recordMatchesAgent } from '../utils/ens-verifier.js';
 
 /**
  * Agent class for managing individual agents
@@ -183,8 +183,9 @@ export class Agent {
    * Verifies that the ENS record configured for this agent actually points to
    * the on-chain registry encoded in the registration file.
    *
-   * Fetches the ENSIP-25 text record, decodes it, and compares it against the
-   * locally stored agentId + registry. Returns false on any mismatch/missing data.
+   * Fetches data records for keys `agent-registry` and `agent-registry: N`,
+   * decodes the payload, and compares it against the locally stored agentId + registry.
+   * Returns false if it cannot find a matching record for this agent's current registry.
    */
   async verifyENSName(): Promise<boolean> {
     // Fast fail if the agent is missing ENS info or is not registered yet.
@@ -202,13 +203,12 @@ export class Agent {
       return false;
     }
 
-    // Resolve the ENS text record published via ENSIP-25 for the agent's chain.
-    const record = await loadAgentRegistryRecord(
+    // Resolve ENSIP-24 `data()` records published via ENSIP-25.
+    const records = await loadAgentRegistryRecords(
       this.sdk.web3Client.provider,
-      ensName,
-      BigInt(tokenInfo.chainId)
+      ensName
     );
-    if (!record) {
+    if (records.length === 0) {
       return false;
     }
 
@@ -220,12 +220,14 @@ export class Agent {
       return false;
     }
 
-    // Compare the ENS payload with expected chain, registry, and token identifiers.
-    return recordMatchesAgent(record, {
-      chainId: BigInt(tokenInfo.chainId),
-      registryAddress,
-      agentId: BigInt(tokenInfo.tokenId),
-    });
+    // Return true if any decoded ENS record matches the expected chain, registry, and token identifiers.
+    return records.some((record) =>
+      recordMatchesAgent(record, {
+        chainId: BigInt(tokenInfo.chainId),
+        registryAddress,
+        agentId: BigInt(tokenInfo.tokenId),
+      })
+    );
   }
 
   // OASF endpoint management
