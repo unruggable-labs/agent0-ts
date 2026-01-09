@@ -9,7 +9,7 @@
  */
 
 import type { AbstractProvider, BytesLike } from 'ethers';
-import { getAddress, getBytes, hexlify, namehash } from 'ethers';
+import { Contract, getAddress, getBytes, hexlify, namehash } from 'ethers';
 import { InteropAddressProvider } from '@defi-wonderland/interop-addresses';
 
 // ERC-7930 chain type code for eip155 (EVM).
@@ -26,9 +26,11 @@ export interface AgentRegistryRecord {
   agentId: bigint;
 }
 
-export interface DataResolverInterface {
+export interface DataResolverContract {
   data(node: string, key: string): Promise<BytesLike>;
 }
+
+const DATA_RESOLVER_ABI = ['function data(bytes32 node, string key) view returns (bytes)'] as const;
 
 /**
  * Keys to check, in priority order: `agent-registry` then `agent-registry: N`.
@@ -41,7 +43,7 @@ export function buildAgentRegistryRecordKeys(maxAdditionalEntries: number = 4): 
   return keys;
 }
 
-function parseAgentRegistryRecord(valueBytes: Uint8Array): {
+export function parseAgentRegistryRecord(valueBytes: Uint8Array): {
   erc7930Hex: `0x${string}`;
   agentIdBytes: Uint8Array;
 } {
@@ -100,11 +102,13 @@ function parseAgentRegistryRecord(valueBytes: Uint8Array): {
 
 async function ensureSupportedNamespace(erc7930Hex: `0x${string}`): Promise<void> {
   // Only EVM addresses are supported today; other namespaces should be rejected early.
-  const humanReadable = await InteropAddressProvider.binaryToHumanReadable(erc7930Hex);
-  const match = humanReadable.match(/@([^:]+):/);
-  const namespace = match?.[1];
-  if (namespace !== 'eip155') {
-    throw new Error(`Unsupported namespace: ${namespace ?? 'unknown'}`);
+  const bytes = getBytes(erc7930Hex);
+  if (bytes.length < 4) {
+    throw new Error('ERC-7930 segment out of bounds');
+  }
+  const chainType = (bytes[2] << 8) | bytes[3];
+  if (chainType !== CHAIN_TYPE_EIP155) {
+    throw new Error('Unsupported namespace');
   }
 }
 
@@ -117,7 +121,6 @@ export async function fetchAgentRegistryDataRecord(
   recordKey: string
 ): Promise<Uint8Array | null> {
   try {
-    // assumption: resolver implements ENSIP-24 `data(bytes32,string)`.
     const value = await resolver.data(node, recordKey);
     const bytes = getBytes(value);
     return bytes.length === 0 ? null : bytes;
@@ -126,13 +129,27 @@ export async function fetchAgentRegistryDataRecord(
   }
 }
 
-// Resolve the ENS resolver for a name; returns null if it is missing or lookup fails.
+// Resolve the ENS resolver for a name; returns null if it is missing or does not support data().
 async function resolveEnsDataResolver(
   provider: AbstractProvider,
   ensName: string
-): Promise<DataResolverInterface | null> {
+): Promise<DataResolverContract | null> {
   try {
-    return (await provider.getResolver(ensName)) as unknown as DataResolverInterface;
+    const resolver = await provider.getResolver(ensName);
+
+    if (!resolver) {
+      return null;
+    }
+
+    if ('data' in resolver && typeof (resolver as any).data === 'function') {
+      return resolver as unknown as DataResolverContract;
+    }
+
+    if (!('address' in resolver) || !resolver.address) {
+      return null;
+    }
+
+    return new Contract(resolver.address, DATA_RESOLVER_ABI, provider) as unknown as DataResolverContract;
   } catch {
     return null;
   }
@@ -140,7 +157,7 @@ async function resolveEnsDataResolver(
 
 /**
  * Decode ENSIP-25 bytes:
- *   `<erc7930AddressBytes><agentIdLen(1 byte)><agentIdBytes>`.
+ * `<erc7930AddressBytes><agentIdLen(1 byte)><agentIdBytes>`.
  */
 export async function decodeAgentRegistryDataRecord(
   valueBytes: Uint8Array
