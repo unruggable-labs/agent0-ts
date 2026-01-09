@@ -10,7 +10,7 @@
 
 import { getAddress, JsonRpcProvider } from 'ethers';
 import { DEFAULT_REGISTRIES } from '../src/core/contracts';
-import { buildAgentRegistryRecordKey, loadAgentRegistryRecord, recordMatchesAgent } from '../src/utils';
+import { loadAgentRegistryRecords, recordMatchesAgent } from '../src/utils';
 
 async function main() {
   const ENS_NAME = 'ens-8004-verifier.eth'; // Replace with the ENS name you want to verify
@@ -38,26 +38,30 @@ async function main() {
     ensRegistry: ENS_REGISTRY_ADDRESS,
   });
 
-  const recordKey = buildAgentRegistryRecordKey(CHAIN_ID);
-  console.log(`[verify-agent-records] Fetching ENS text key ${recordKey}`);
+  console.log('[verify-agent-records] Fetching ENSIP-24 data records: agent-registry + agent-registry: N');
 
-  const record = await loadAgentRegistryRecord(provider, ENS_NAME, CHAIN_ID);
-
-  if (!record) {
-    console.error('No agent-registry record found.');
+  const records = await loadAgentRegistryRecords(provider, ENS_NAME);
+  if (records.length === 0) {
+    console.error('No agent-registry records found.');
     return;
   }
 
-  console.log('Decoded registry record:');
-  console.log(record);
+  console.log('Decoded registry records:');
+  console.log(records);
 
-  const matches = recordMatchesAgent(record, {
-    chainId: CHAIN_ID,
-    registryAddress: EXPECTED_REGISTRY_ADDRESS,
-    agentId: EXPECTED_AGENT_ID,
-  });
+  const matches = records.some((record) =>
+    recordMatchesAgent(record, {
+      chainId: CHAIN_ID,
+      registryAddress: EXPECTED_REGISTRY_ADDRESS,
+      agentId: EXPECTED_AGENT_ID,
+    })
+  );
 
-  console.log(matches ? '✅ Registry record matches expected agent data.' : '❌ Registry record does not match expected agent data.');
+  console.log(
+    matches
+      ? '✅ Registry record matches expected agent data.'
+      : '❌ Registry record does not match expected agent data.'
+  );
 
   const resolver = await provider.getResolver(ENS_NAME);
   console.log('[verify-agent-records] Resolver address:', resolver?.address ?? 'not set');

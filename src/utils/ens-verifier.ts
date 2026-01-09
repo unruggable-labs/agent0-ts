@@ -45,42 +45,55 @@ function parseAgentRegistryRecord(valueBytes: Uint8Array): {
   erc7930Hex: `0x${string}`;
   agentIdBytes: Uint8Array;
 } {
-  // First 2 bytes are the ERC-7930 segment length.
-  if (valueBytes.length < 2) {
+  // ENSIP-25:
+  //   `<erc7930AddressBytes><agentIdLen(1 byte)><agentIdBytes>`
+  if (valueBytes.length < 6) {
     throw new Error('agent-registry record value too short');
   }
-  const header = valueBytes.slice(0, 2);
-  const erc7930Len = (header[0] << 8) | header[1];
 
-  // Remaining bytes start with the ERC-7930 payload, then the agent-id portion.
-  const body = valueBytes.slice(2);
-  if (erc7930Len > body.length) {
+  // Parse the ERC-7930 envelope to find where it ends.
+  let offset = 0;
+  offset += 4; // version (2 bytes) + chain type (2 bytes)
+  if (offset >= valueBytes.length) {
     throw new Error('ERC-7930 segment out of bounds');
   }
+  const chainRefLen = valueBytes[offset];
+  offset += 1;
+  if (offset + chainRefLen > valueBytes.length) {
+    throw new Error('ERC-7930 segment out of bounds');
+  }
+  offset += chainRefLen;
+  if (offset >= valueBytes.length) {
+    throw new Error('ERC-7930 segment out of bounds');
+  }
+  const addrLen = valueBytes[offset];
+  offset += 1;
+  if (offset + addrLen > valueBytes.length) {
+    throw new Error('ERC-7930 segment out of bounds');
+  }
+  offset += addrLen;
 
-  // Slice out the ERC-7930 binary payload so we can use the interop library to decode it.
-  const erc7930Hex = hexlify(body.slice(0, erc7930Len)) as `0x${string}`;
+  const erc7930Hex = hexlify(valueBytes.slice(0, offset)) as `0x${string}`;
 
   if (!InteropAddressProvider.isValidBinaryAddress(erc7930Hex)) {
     throw new Error('Invalid ERC-7930 binary address');
   }
 
   // Next byte is agent ID length, followed by that many bytes of agent ID.
-  const lengthOffset = erc7930Len;
-  if (lengthOffset >= body.length) {
+  if (offset >= valueBytes.length) {
     throw new Error('agent-registry record value too short');
   }
-  const agentIdLen = body[lengthOffset];
-  const agentIdStart = lengthOffset + 1;
+  const agentIdLen = valueBytes[offset];
+  const agentIdStart = offset + 1;
   const recordEnd = agentIdStart + agentIdLen;
-  if (recordEnd !== body.length) {
+  if (recordEnd !== valueBytes.length) {
     throw new Error(
-      recordEnd > body.length
+      recordEnd > valueBytes.length
         ? 'Agent ID out of bounds'
         : 'Unexpected trailing bytes in agent-registry record'
     );
   }
-  const agentIdBytes = body.slice(agentIdStart, recordEnd);
+  const agentIdBytes = valueBytes.slice(agentIdStart, recordEnd);
 
   return { erc7930Hex, agentIdBytes };
 }
@@ -127,7 +140,7 @@ async function resolveEnsDataResolver(
 
 /**
  * Decode ENSIP-25 bytes:
- *   `<erc7930Len(2 bytes)><erc7930AddressBytes><agentIdLen(1 byte)><agentIdBytes>`.
+ *   `<erc7930AddressBytes><agentIdLen(1 byte)><agentIdBytes>`.
  */
 export async function decodeAgentRegistryDataRecord(
   valueBytes: Uint8Array

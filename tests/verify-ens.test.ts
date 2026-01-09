@@ -31,10 +31,8 @@ function encodeAgentRegistryDataRecord(input: {
   });
   const erc7930Bytes = ethers.getBytes(erc7930);
 
-  const erc7930Len = erc7930Bytes.length;
-  const erc7930LenBytes = new Uint8Array([(erc7930Len >> 8) & 0xff, erc7930Len & 0xff]);
   const agentIdLen = new Uint8Array([agentIdBytes.length]);
-  const valueBytes = ethers.concat([erc7930LenBytes, erc7930Bytes, agentIdLen, agentIdBytes]);
+  const valueBytes = ethers.concat([erc7930Bytes, agentIdLen, agentIdBytes]);
   return ethers.hexlify(valueBytes);
 }
 
